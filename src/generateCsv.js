@@ -3,7 +3,7 @@ const util = require("util");
 const stream = require("stream");
 const { once } = require("events");
 
-const finished = util.promisify(stream.finished); // (A)
+const finished = util.promisify(stream.finished);
 
 async function generateCsv({ fileName, columns, rows, quotes }) {
   const file = fs.createWriteStream(fileName, { encoding: "utf8" });

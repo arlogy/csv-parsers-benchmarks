@@ -5,20 +5,25 @@ const dekkai = require("dekkai/dist/umd/dekkai");
 const fastCsv = require("fast-csv");
 const Papa = require("papaparse");
 
+const Jsu = require("jsupack");
+const JsuCsvPsr = Jsu.CsvParser;
+
 async function benchmark(name, func, { cycles = 10 }) {
-  // warm up
+  let elapsed = Infinity;
   try {
-    await func();
+    await func(); // warm up
 
     const start = Date.now();
     for (let i = 0; i < cycles; ++i) {
       await func();
     }
-    const elapsed = Date.now() - start;
-    console.log(`${name}: ${(elapsed / cycles).toFixed(2)} ms`);
+    elapsed = (Date.now() - start) / cycles;
+    console.log(`${name}: ${elapsed.toFixed(2)} ms`);
   } catch (e) {
     console.error(`${name}: crashed`, e);
   }
+
+  return { name, elapsed };
 }
 
 async function parseManual(fileName) {
@@ -71,8 +76,21 @@ async function parseDekkai(fileName) {
     data.push(arr);
   });
 
-  // console.log(data);
   return data;
+}
+
+async function parseJsu(fileName, smartRegex) {
+  const fileContent = (
+    await fs.promises.readFile(fileName, { encoding: "utf8" })
+  );
+
+  const parser = new JsuCsvPsr({ smartRegex });
+  await parser.readChunk(fileContent);
+  parser.flush();
+
+  let records = parser.getRecordsRef();
+  records = records.slice(1); // ignore header line as in parseCsvStream()
+  return records;
 }
 
 async function benchmarkParsers({ name, fileName, rows, quotes, cycles }) {
@@ -83,31 +101,34 @@ async function benchmarkParsers({ name, fileName, rows, quotes, cycles }) {
     if (sum !== expectedSum) throw new Error("Test Failed. Sum: " + sum);
   };
 
+  const benData = []; // benchmark data
+
   console.log(`Running ${name}`);
+
   if (!quotes) {
-    await benchmark(
+    benData.push(await benchmark(
       "String.split",
       async () => {
         const lines = await parseManual(fileName);
         checkLines(lines);
       },
       { cycles }
-    );
+    ));
   }
 
   if (rows <= 10000) {
     // it crashes the whole process on 100k
-    await benchmark(
+    benData.push(await benchmark(
       "dekkai",
       async () => {
         const lines = await parseDekkai(fileName);
         checkLines(lines);
       },
       { cycles }
-    );
+    ));
   }
 
-  await benchmark(
+  benData.push(await benchmark(
     "papaparse",
     async () => {
       const lines = await parseCsvStream(fileName, () =>
@@ -118,9 +139,9 @@ async function benchmarkParsers({ name, fileName, rows, quotes, cycles }) {
       checkLines(lines);
     },
     { cycles }
-  );
+  ));
 
-  await benchmark(
+  benData.push(await benchmark(
     "csv-parser",
     async () => {
       const lines = await parseCsvStream(fileName, () =>
@@ -129,18 +150,18 @@ async function benchmarkParsers({ name, fileName, rows, quotes, cycles }) {
       checkLines(lines);
     },
     { cycles }
-  );
+  ));
 
-  await benchmark(
+  benData.push(await benchmark(
     "csv-parse",
     async () => {
       const lines = await parseCsvStream(fileName, csvParse);
       checkLines(lines);
     },
     { cycles }
-  );
+  ));
 
-  await benchmark(
+  benData.push(await benchmark(
     "fast-csv",
     async () => {
       const lines = await parseCsvStream(fileName, () =>
@@ -149,6 +170,51 @@ async function benchmarkParsers({ name, fileName, rows, quotes, cycles }) {
       checkLines(lines);
     },
     { cycles }
+  ));
+
+  benData.push(await benchmark(
+    "jsu-smart-on",
+    async () => {
+      const lines = await parseJsu(fileName, true);
+      checkLines(lines);
+    },
+    { cycles }
+  ));
+
+  benData.push(await benchmark(
+    "jsu-smart-off",
+    async () => {
+      const lines = await parseJsu(fileName, false);
+      checkLines(lines);
+    },
+    { cycles }
+  ));
+
+  let rankData = benData.map(d => Object.assign({}, d)); // copy data
+  rankData.sort((a, b) => a.elapsed - b.elapsed);
+
+  // set custom ranking positions knowing that rankData is sorted in ascending
+  // order; custom ranking positions are introduced because speed variations of
+  // a few milliseconds tend to change between runs, and a speed gain of 250 ms
+  // is hardly noticeable
+  const samePosExpected = (a, b) => a.elapsed - b.elapsed <= 250;
+  const samePosForAll = (data, limit, p, d) => {
+    for(let j = 0; j <= limit; ++j) {
+      if(data[j].pos === p && !samePosExpected(d, data[j])) return false;
+    }
+    return true;
+  };
+  if(rankData.length !== 0) rankData[0].pos = 1;
+  for(let i = 1; i < rankData.length; ++i) {
+    const currData = rankData[i], prevData = rankData[i-1];
+    if(samePosExpected(currData, prevData) && samePosForAll(rankData, i-1, prevData.pos, currData))
+      currData.pos = prevData.pos;
+    else currData.pos = prevData.pos + 1;
+  }
+
+  console.log(
+    "Ranking parsers:",
+    rankData.map(d => `${d.pos}. ${d.name} (${d.elapsed})`).join(" / ")
   );
 }
 
