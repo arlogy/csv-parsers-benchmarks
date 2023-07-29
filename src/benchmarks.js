@@ -93,6 +93,14 @@ async function parseJsu(fileName, smartRegex) {
   return records;
 }
 
+function logParserRanks(rankData, msg) {
+  if(!msg) msg = "Parser ranks";
+  console.log(
+    `${msg}:`,
+    rankData.map(d => `${d.pos}. ${d.name} (${d.elapsed})`).join(" / ")
+  );
+}
+
 async function benchmarkParsers({ name, fileName, rows, quotes, cycles }) {
   const expectedSum = (rows * (rows - 1)) / 2;
 
@@ -190,32 +198,46 @@ async function benchmarkParsers({ name, fileName, rows, quotes, cycles }) {
     { cycles }
   ));
 
-  let rankData = benData.map(d => Object.assign({}, d)); // copy data
-  rankData.sort((a, b) => a.elapsed - b.elapsed);
+  // rank parsers
 
-  // set custom ranking positions knowing that rankData is sorted in ascending
-  // order; custom ranking positions are introduced because speed variations of
-  // a few milliseconds tend to change between runs, and a speed gain of 250 ms
-  // is hardly noticeable
-  const samePosExpected = (a, b) => a.elapsed - b.elapsed <= 250;
-  const samePosForAll = (data, limit, p, d) => {
-    for(let j = 0; j <= limit; ++j) {
-      if(data[j].pos === p && !samePosExpected(d, data[j])) return false;
+  console.log("Ranking parsers: DFLT = default approach, I250 = Ignore speed gains up to 250 ms for speed similarity ranking");
+
+  // default ranking: compare elapsed time as is between parsers
+  (function() {
+    const rankData = benData.map(d => Object.assign({}, d)); // copy data
+    rankData.sort((a, b) => a.elapsed - b.elapsed);
+    rankData.forEach((d, i) => d.pos = i + 1);
+    logParserRanks(rankData, "  DFLT");
+  })();
+
+  // custom rankings: ignore speed variations of a few milliseconds that tend to
+  // change between runs, thus influencing which parser is faster; we'll ignore
+  // up to 250 ms because such a speed gain is barely noticeable between parsers
+  (function() {
+    const samePosExpected = (a, b) => Math.abs(a.elapsed - b.elapsed) <= 250;
+    const samePosForAll = (data, begin, end, d) => {
+      for(let i = begin; i <= end; ++i) {
+        if(!samePosExpected(d, data[i])) return false;
+      }
+      return true;
+    };
+    let lastDiffIndex = 0; // last index at which parser ranks were different (default is smallest index, 0)
+    // start ranking
+    const rankData = benData.map(d => Object.assign({}, d)); // copy data
+    rankData.sort((a, b) => a.elapsed - b.elapsed); // sort data to easier computation below
+    if(rankData.length !== 0) rankData[0].pos = 1;
+    for(let i = 1; i < rankData.length; ++i) {
+      const currData = rankData[i];
+      const prevData = rankData[i-1];
+      if(samePosExpected(currData, prevData) && samePosForAll(rankData, lastDiffIndex, i-2, currData)) {
+        currData.pos = prevData.pos;
+      } else {
+        currData.pos = prevData.pos + 1;
+        lastDiffIndex = i;
+      }
     }
-    return true;
-  };
-  if(rankData.length !== 0) rankData[0].pos = 1;
-  for(let i = 1; i < rankData.length; ++i) {
-    const currData = rankData[i], prevData = rankData[i-1];
-    if(samePosExpected(currData, prevData) && samePosForAll(rankData, i-1, prevData.pos, currData))
-      currData.pos = prevData.pos;
-    else currData.pos = prevData.pos + 1;
-  }
-
-  console.log(
-    "Ranking parsers:",
-    rankData.map(d => `${d.pos}. ${d.name} (${d.elapsed})`).join(" / ")
-  );
+    logParserRanks(rankData, "  I250");
+  })();
 }
 
 module.exports = {
