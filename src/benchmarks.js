@@ -8,6 +8,8 @@ const Papa = require("papaparse");
 const Jsu = require("jsupack");
 const JsuCsvPsr = Jsu.CsvParser;
 
+const Udsv = require("udsv");
+
 async function benchmark(name, func, { cycles = 10 }) {
   let elapsed = Infinity;
   try {
@@ -89,7 +91,19 @@ async function parseJsu(fileName, smartRegex) {
   parser.flush();
 
   let records = parser.getRecordsRef();
-  records = records.slice(1); // ignore header line as in parseCsvStream()
+  records = records.slice(1); // ignore header line, which is also simulated in parseCsvStream()
+  return records;
+}
+
+async function parseUdsv(fileName) {
+  const fileContent = (
+    await fs.promises.readFile(fileName, { encoding: "utf8" })
+  );
+
+  const schema = Udsv.inferSchema(fileContent);
+  const parser = Udsv.initParser(schema);
+
+  const records = parser.stringArrs(fileContent);
   return records;
 }
 
@@ -198,9 +212,18 @@ async function benchmarkParsers({ name, fileName, rows, quotes, cycles }) {
     { cycles }
   ));
 
+  benData.push(await benchmark(
+    "udsv",
+    async () => {
+      const lines = await parseUdsv(fileName);
+      checkLines(lines);
+    },
+    { cycles }
+  ));
+
   // rank parsers
 
-  console.log("Ranking parsers: DFLT = default approach, I250 = Ignore speed gains up to 250 ms for speed similarity ranking");
+  console.log("Ranking parsers: DFLT = default approach, I250 = Ignore speed gains up to 250 ms");
 
   // default ranking: compare elapsed time as is between parsers
   (function() {
